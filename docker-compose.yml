@@ -1,0 +1,9 @@
+version: "3.8"
+
+services:
+  fwqyingluo2:
+    build: .
+    container_name: fwqyingluo2
+    restart: always
+    ports:
+      - "8000:8000"
