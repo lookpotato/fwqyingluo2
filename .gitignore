@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.env
+audio_outputs/*
+!audio_outputs/.gitkeep
+data/*.sqlite
+

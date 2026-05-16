@@ -7,3 +7,15 @@ services:
     restart: always
     ports:
       - "8000:8000"
+    environment:
+      - PERSONALITY_ID=default_robot
+      - AUDIO_OUTPUT_DIR=/app/audio_outputs
+      - MEMORY_DB_PATH=/app/data/memory.sqlite
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      - DEEPSEEK_REASONING_EFFORT=${DEEPSEEK_REASONING_EFFORT:-high}
+      - DEEPSEEK_THINKING_ENABLED=${DEEPSEEK_THINKING_ENABLED:-true}
+    volumes:
+      - ./data:/app/data
+      - ./audio_outputs:/app/audio_outputs
