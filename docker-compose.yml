@@ -16,6 +16,10 @@ services:
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
       - DEEPSEEK_REASONING_EFFORT=${DEEPSEEK_REASONING_EFFORT:-high}
       - DEEPSEEK_THINKING_ENABLED=${DEEPSEEK_THINKING_ENABLED:-true}
+      - TTS_PROVIDER=${TTS_PROVIDER:-gtts}
+      - TTS_LANGUAGE=${TTS_LANGUAGE:-zh-CN}
+      - TTS_VOICE=${TTS_VOICE:-zh-CN-XiaoxiaoNeural}
+      - TTS_RATE=${TTS_RATE:-+0%}
     volumes:
       - ./data:/app/data
       - ./audio_outputs:/app/audio_outputs

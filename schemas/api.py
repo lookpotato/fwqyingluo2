@@ -27,3 +27,13 @@ class TextChatResponse(BaseModel):
 class VoiceChatResponse(TextChatResponse):
     audio_url: str | None = None
 
+
+class TextToSpeechRequest(BaseModel):
+    text: str = Field(..., examples=["你好，我是萤落，很高兴认识你。"])
+
+
+class TextToSpeechResponse(BaseModel):
+    ok: bool
+    text: str
+    audio_url: str
+    time: str

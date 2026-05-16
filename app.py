@@ -4,7 +4,13 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from schemas.api import DeviceMessage, TextChatResponse, VoiceChatResponse
+from schemas.api import (
+    DeviceMessage,
+    TextChatResponse,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
+    VoiceChatResponse,
+)
 from services.brain_service import generate_reply
 from services.emotion_service import analyze_emotion
 from services.memory_service import get_recent_turns, save_conversation_turn
@@ -84,7 +90,7 @@ async def voice_chat(
         emotion=emotion,
         recent_turns=recent_turns,
     )
-    audio_url, _audio_path = synthesize_speech(reply_text)
+    audio_url, _audio_path = await synthesize_speech(reply_text)
 
     save_conversation_turn(
         device_id=device_id,
@@ -100,6 +106,17 @@ async def voice_chat(
         emotion=emotion,
         reply_text=reply_text,
         robot_mood=robot_mood,
+        audio_url=audio_url,
+        time=datetime.now().isoformat(),
+    )
+
+
+@app.post("/api/voice/tts", response_model=TextToSpeechResponse)
+async def text_to_speech(data: TextToSpeechRequest):
+    audio_url, _audio_path = await synthesize_speech(data.text)
+    return TextToSpeechResponse(
+        ok=True,
+        text=data.text,
         audio_url=audio_url,
         time=datetime.now().isoformat(),
     )
