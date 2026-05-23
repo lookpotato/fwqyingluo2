@@ -37,6 +37,7 @@ def health_check():
 def receive_message(data: DeviceMessage):
     emotion = analyze_emotion(data.message)
     recent_turns = get_recent_turns(data.device_id)
+    print(f"刷新语句")
     reply_text, robot_mood = generate_reply(
         device_id=data.device_id,
         user_text=data.message,
