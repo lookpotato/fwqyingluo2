@@ -6,3 +6,5 @@ audio_outputs/*
 data/*.sqlite
 models/*
 !models/.gitkeep
+!models/vosk-model-small-cn-0.22/
+!models/vosk-model-small-cn-0.22/**
