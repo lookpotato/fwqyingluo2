@@ -26,10 +26,13 @@ class Settings(BaseModel):
     deepseek_reasoning_effort: str = os.getenv("DEEPSEEK_REASONING_EFFORT", "high")
     deepseek_thinking_enabled: bool = _env_bool("DEEPSEEK_THINKING_ENABLED", True)
     deepseek_timeout_seconds: float = float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "30"))
-    tts_provider: str = os.getenv("TTS_PROVIDER", "gtts")
+    tts_provider: str = os.getenv("TTS_PROVIDER", "edge")
     tts_language: str = os.getenv("TTS_LANGUAGE", "zh-CN")
     tts_voice: str = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
     tts_rate: str = os.getenv("TTS_RATE", "+0%")
+    tts_connect_timeout_seconds: float = float(os.getenv("TTS_CONNECT_TIMEOUT_SECONDS", "5"))
+    tts_read_timeout_seconds: float = float(os.getenv("TTS_READ_TIMEOUT_SECONDS", "15"))
+    vosk_model_dir: Path = Path(os.getenv("VOSK_MODEL_DIR", "models/vosk-model-small-cn-0.22"))
 
 
 @lru_cache

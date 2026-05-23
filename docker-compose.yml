@@ -16,10 +16,14 @@ services:
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
       - DEEPSEEK_REASONING_EFFORT=${DEEPSEEK_REASONING_EFFORT:-high}
       - DEEPSEEK_THINKING_ENABLED=${DEEPSEEK_THINKING_ENABLED:-true}
-      - TTS_PROVIDER=${TTS_PROVIDER:-gtts}
+      - TTS_PROVIDER=${TTS_PROVIDER:-edge}
+      - TTS_CONNECT_TIMEOUT_SECONDS=${TTS_CONNECT_TIMEOUT_SECONDS:-5}
+      - TTS_READ_TIMEOUT_SECONDS=${TTS_READ_TIMEOUT_SECONDS:-15}
       - TTS_LANGUAGE=${TTS_LANGUAGE:-zh-CN}
       - TTS_VOICE=${TTS_VOICE:-zh-CN-XiaoxiaoNeural}
       - TTS_RATE=${TTS_RATE:-+0%}
+      - VOSK_MODEL_DIR=${VOSK_MODEL_DIR:-/app/models/vosk-model-small-cn-0.22}
     volumes:
       - ./data:/app/data
       - ./audio_outputs:/app/audio_outputs
+      - ./models:/app/models

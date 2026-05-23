@@ -14,7 +14,11 @@ async def synthesize_speech(reply_text: str) -> tuple[str, Path]:
     audio_path = settings.audio_output_dir / filename
 
     if settings.tts_provider.lower() == "gtts":
-        await asyncio.to_thread(_save_gtts, reply_text, audio_path, settings.tts_language)
+        timeout = (
+            settings.tts_connect_timeout_seconds,
+            settings.tts_read_timeout_seconds,
+        )
+        await asyncio.to_thread(_save_gtts, reply_text, audio_path, settings.tts_language, timeout)
         return f"/api/audio/reply/{filename}", audio_path
 
     communicate = edge_tts.Communicate(
@@ -27,5 +31,10 @@ async def synthesize_speech(reply_text: str) -> tuple[str, Path]:
     return f"/api/audio/reply/{filename}", audio_path
 
 
-def _save_gtts(reply_text: str, audio_path: Path, language: str) -> None:
-    gTTS(text=reply_text, lang=language).save(str(audio_path))
+def _save_gtts(
+    reply_text: str,
+    audio_path: Path,
+    language: str,
+    timeout: tuple[float, float],
+) -> None:
+    gTTS(text=reply_text, lang=language, timeout=timeout).save(str(audio_path))

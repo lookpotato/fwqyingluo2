@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -19,6 +20,7 @@ from services.stt_service import transcribe_audio
 from services.tts_service import synthesize_speech
 
 app = FastAPI(title="ESP32-S3 Voice Robot Server")
+logger = logging.getLogger(__name__)
 
 
 @app.get("/")
@@ -90,7 +92,7 @@ async def voice_chat(
         emotion=emotion,
         recent_turns=recent_turns,
     )
-    audio_url, _audio_path = await synthesize_speech(reply_text)
+    audio_url = await _try_synthesize_speech(reply_text)
 
     save_conversation_turn(
         device_id=device_id,
@@ -113,7 +115,11 @@ async def voice_chat(
 
 @app.post("/api/voice/tts", response_model=TextToSpeechResponse)
 async def text_to_speech(data: TextToSpeechRequest):
-    audio_url, _audio_path = await synthesize_speech(data.text)
+    try:
+        audio_url, _audio_path = await synthesize_speech(data.text)
+    except Exception as exc:
+        logger.exception("Text-to-speech failed")
+        raise HTTPException(status_code=503, detail="Text-to-speech service unavailable") from exc
     return TextToSpeechResponse(
         ok=True,
         text=data.text,
@@ -132,6 +138,15 @@ def get_reply_audio(reply_id: str):
 
     media_type = _guess_audio_media_type(audio_path)
     return FileResponse(audio_path, media_type=media_type, filename=audio_path.name)
+
+
+async def _try_synthesize_speech(text: str) -> str | None:
+    try:
+        audio_url, _audio_path = await synthesize_speech(text)
+        return audio_url
+    except Exception:
+        logger.exception("Voice chat text-to-speech failed")
+        return None
 
 
 def _guess_audio_media_type(path: Path) -> str:

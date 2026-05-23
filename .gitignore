@@ -4,4 +4,5 @@ __pycache__/
 audio_outputs/*
 !audio_outputs/.gitkeep
 data/*.sqlite
-
+models/*
+!models/.gitkeep
