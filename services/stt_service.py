@@ -29,6 +29,52 @@ async def transcribe_audio(audio: UploadFile) -> dict[str, str]:
     }
 
 
+async def transcribe_pcm(
+    audio_bytes: bytes,
+    sample_rate: int = 16000,
+) -> dict[str, str]:
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="PCM audio is empty")
+
+    try:
+        text = await asyncio.to_thread(_recognize_pcm, audio_bytes, sample_rate)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "text": text,
+        "language": "zh",
+        "sample_rate": str(sample_rate),
+    }
+
+
+def create_pcm_recognizer(sample_rate: int = 16000) -> KaldiRecognizer:
+    recognizer = KaldiRecognizer(_get_model(), sample_rate)
+    recognizer.SetWords(True)
+    return recognizer
+
+
+def accept_pcm_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> dict[str, str | bool]:
+    accepted = recognizer.AcceptWaveform(chunk)
+    if accepted:
+        result = json.loads(recognizer.Result())
+        return {
+            "accepted": True,
+            "text": result.get("text", "").strip(),
+        }
+
+    partial = json.loads(recognizer.PartialResult())
+    return {
+        "accepted": False,
+        "partial": partial.get("partial", "").strip(),
+    }
+
+
+def final_pcm_result(recognizer: KaldiRecognizer) -> str:
+    result = json.loads(recognizer.FinalResult())
+    return result.get("text", "").strip()
+
+
 def _recognize_wav(audio_bytes: bytes) -> tuple[str, int]:
     model = _get_model()
 
@@ -53,6 +99,13 @@ def _recognize_wav(audio_bytes: bytes) -> tuple[str, int]:
 
     result = json.loads(recognizer.FinalResult())
     return result.get("text", "").strip(), sample_rate
+
+
+def _recognize_pcm(audio_bytes: bytes, sample_rate: int) -> str:
+    recognizer = create_pcm_recognizer(sample_rate)
+    for start in range(0, len(audio_bytes), 4000):
+        recognizer.AcceptWaveform(audio_bytes[start : start + 4000])
+    return final_pcm_result(recognizer)
 
 
 @lru_cache
