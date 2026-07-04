@@ -2,8 +2,8 @@ from pydantic import BaseModel, Field
 
 
 class DeviceMessage(BaseModel):
-    device_id: str = Field(..., examples=["esp32s3-001"])
-    message: str = Field(..., examples=["你好"])
+    device_id: str = Field(..., examples=["esp32s3-001"], min_length=1)
+    message: str = Field(..., examples=["你好"], min_length=1)
 
 
 class EmotionResult(BaseModel):
@@ -29,7 +29,7 @@ class VoiceChatResponse(TextChatResponse):
 
 
 class TextToSpeechRequest(BaseModel):
-    text: str = Field(..., examples=["你好，我是萤落，很高兴认识你。"])
+    text: str = Field(..., examples=["你好，我是影落，很高兴认识你。"], min_length=1)
 
 
 class TextToSpeechResponse(BaseModel):

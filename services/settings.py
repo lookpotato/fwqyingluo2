@@ -32,7 +32,16 @@ class Settings(BaseModel):
     tts_rate: str = os.getenv("TTS_RATE", "+0%")
     tts_connect_timeout_seconds: float = float(os.getenv("TTS_CONNECT_TIMEOUT_SECONDS", "5"))
     tts_read_timeout_seconds: float = float(os.getenv("TTS_READ_TIMEOUT_SECONDS", "15"))
+    stt_provider: str = os.getenv("STT_PROVIDER", "vosk")
     vosk_model_dir: Path = Path(os.getenv("VOSK_MODEL_DIR", "models/vosk-model-small-cn-0.22"))
+    sherpa_model_dir: Path = Path(
+        os.getenv(
+            "SHERPA_MODEL_DIR",
+            "models/sherpa-onnx-streaming-zipformer-ctc-zh-int8-2025-06-30",
+        )
+    )
+    sherpa_num_threads: int = int(os.getenv("SHERPA_NUM_THREADS", "2"))
+    sherpa_provider: str = os.getenv("SHERPA_PROVIDER", "cpu")
 
 
 @lru_cache

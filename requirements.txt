@@ -7,3 +7,5 @@ openai
 edge-tts
 gTTS
 vosk
+numpy
+sherpa-onnx==1.13.3

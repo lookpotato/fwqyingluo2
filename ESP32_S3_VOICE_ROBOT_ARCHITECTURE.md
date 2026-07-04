@@ -1,76 +1,86 @@
 # ESP32-S3 语音机器人架构设计
 
-本文档用于设计第一个核心功能：ESP32-S3 主板通过录音头采集语音，把语音上传到服务器，服务器完成语音识别、情绪和人格处理、大模型思考、文字转语音，然后把音频返回给机器人播放。
-
-当前项目已经有一个 FastAPI 服务雏形，后续建议在这个服务上逐步扩展，而不是一次性把所有能力堆进去。
+本文档描述 ESP32-S3 语音机器人从硬件采集、服务端识别、情绪和人格处理、大模型回复、语音合成到播放的整体架构。当前项目已经具备服务端核心链路，后续重点是持久化记忆、ESP32-S3 固件联调和实时体验优化。
 
 ## 1. 总体目标
 
 机器人需要形成一条完整闭环：
 
-1. ESP32-S3 录音头采集用户语音。
-2. ESP32-S3 把音频上传到服务器。
-3. 服务器把音频转成文字。
-4. 服务器通过情绪/人格层判断用户语气、当前关系状态、机器人当前人格反应方式。
-5. 大模型作为“大脑”生成回答。
-6. 服务器把回答文字转成语音。
+1. ESP32-S3 通过 I2S 麦克风采集用户语音。
+2. ESP32-S3 将音频上传到服务端。
+3. 服务端把音频转成文字。
+4. 服务端分析情绪、读取人格和近期记忆。
+5. 大模型生成适合语音播放的简短中文回复。
+6. 服务端把回复文字合成为音频。
 7. ESP32-S3 下载或接收音频并播放。
 
-第一阶段建议先做“按键录音 + HTTP 上传 + 返回一段音频”的稳定版本。等跑通后，再升级成实时对话。
+当前服务端同时支持两种交互方式：
 
-## 2. 推荐第一版架构
+- HTTP 短语音上传：简单稳定，适合第一版端到端闭环。
+- WebSocket PCM 分片上传：更接近实时对话，适合后续优化延迟。
+
+## 2. 当前推荐架构
 
 ```mermaid
 flowchart LR
     A["ESP32-S3 + I2S 麦克风"] --> B["录音缓存 WAV/PCM"]
-    B --> C["HTTP POST /api/voice/chat"]
-    C --> D["FastAPI 服务器"]
-    D --> E["STT 语音识别"]
-    E --> F["情绪/状态分析"]
-    F --> G["人格系统提示词 + 记忆"]
-    G --> H["大模型生成回答"]
-    H --> I["TTS 文字转语音"]
-    I --> J["返回 audio/mpeg 或 audio/wav"]
-    J --> K["ESP32-S3 播放"]
+    B --> C1["HTTP /api/voice/chat"]
+    B --> C2["WebSocket /ws/voice"]
+    C1 --> D["FastAPI 服务端"]
+    C2 --> D
+    D --> E["Vosk STT 语音识别"]
+    E --> F["情绪/意图分析"]
+    F --> G["人格配置 + 近期记忆"]
+    G --> H["DeepSeek 兼容大模型 / 本地兜底"]
+    H --> I["Edge TTS / gTTS"]
+    I --> J["audio_outputs/*.mp3"]
+    J --> K["GET /api/audio/reply/{file}"]
+    K --> L["ESP32-S3 播放"]
 ```
 
-### 为什么第一版不用实时流式
-
-ESP32-S3 资源有限，音频采集、Wi-Fi、播放和 TLS 同时处理时容易出问题。第一版先用短语音上传，调试简单，服务端日志清楚，失败也容易重试。
-
-第一版体验可以做成：
-
-- 按住按钮开始录音，松开按钮发送。
-- 或检测到说话后录 3-8 秒再发送。
-- 服务器处理完成后返回一段 MP3/WAV。
-- ESP32-S3 播放完成后继续等待下一句话。
-
-## 3. 服务器模块拆分
-
-建议把服务器拆成这些模块：
+## 3. 服务端模块
 
 ```text
 app.py
+schemas/
+  api.py
 services/
-  stt_service.py          # 语音转文字
-  emotion_service.py      # 情绪/语气分析
-  personality_service.py  # 人格、说话风格、长期设定
-  memory_service.py       # 用户记忆、对话摘要、设备状态
-  brain_service.py        # 大模型回答生成
-  tts_service.py          # 文字转语音
+  settings.py
+  stt_service.py
+  emotion_service.py
+  personality_service.py
+  memory_service.py
+  brain_service.py
+  tts_service.py
 data/
   personalities/
-    default_robot.yaml    # 机器人独一无二的人格配置
-  memory.sqlite           # 第一版可用 SQLite
+    default_robot.yaml
+models/
+  vosk-model-small-cn-0.22/
+audio_outputs/
 ```
 
-第一版也可以先不拆这么细，但接口和逻辑要按这个方向设计，后面才不会重写。
+模块职责：
 
-## 4. 核心 API 设计
+- `app.py`：FastAPI 入口，声明 HTTP 和 WebSocket 接口。
+- `schemas/api.py`：请求和响应结构。
+- `settings.py`：环境变量和运行目录。
+- `stt_service.py`：Vosk 中文语音识别。
+- `emotion_service.py`：规则版情绪和意图分析。
+- `personality_service.py`：读取机器人固定人格。
+- `memory_service.py`：近期对话记忆，目前是内存版。
+- `brain_service.py`：调用 DeepSeek 兼容接口生成回复，失败时使用本地兜底。
+- `tts_service.py`：使用 Edge TTS 或 gTTS 生成 MP3。
+
+更细的代码结构说明见：
+
+```text
+CODE_ARCHITECTURE.md
+```
+
+## 4. 核心接口
 
 ### 4.1 健康检查
-
-当前已有：
 
 ```http
 GET /
@@ -79,8 +89,6 @@ GET /
 用于确认服务是否在线。
 
 ### 4.2 文本测试接口
-
-保留现有接口，方便不接麦克风时测试大模型链路：
 
 ```http
 POST /api/device/message
@@ -92,9 +100,20 @@ Content-Type: application/json
 }
 ```
 
-### 4.3 语音对话接口
+用途：不经过麦克风，直接验证情绪分析、人格、大模型和记忆链路。
 
-新增推荐接口：
+### 4.3 语音识别接口
+
+```http
+POST /api/voice/transcribe
+Content-Type: multipart/form-data
+
+audio: voice.wav
+```
+
+用途：单独测试 STT。当前要求上传单声道 16-bit PCM WAV。
+
+### 4.4 完整语音对话接口
 
 ```http
 POST /api/voice/chat
@@ -106,74 +125,116 @@ format: wav
 sample_rate: 16000
 ```
 
-推荐返回方式：
+典型返回：
 
-```http
-Content-Type: application/json
-
+```json
 {
   "ok": true,
   "device_id": "esp32s3-001",
-  "user_text": "你好，你是谁？",
+  "user_text": "你好",
   "emotion": {
-    "label": "curious",
-    "intensity": 0.42
+    "label": "neutral",
+    "intensity": 0.3,
+    "intent": "chat",
+    "need_comfort": false,
+    "safety_risk": "none"
   },
-  "reply_text": "我是你的桌面小伙伴，刚醒过来，正在认识你的声音。",
-  "audio_url": "/api/audio/reply/abc123.mp3"
+  "reply_text": "你好，我在这里。",
+  "robot_mood": "warm",
+  "audio_url": "/api/audio/reply/abc123.mp3",
+  "time": "2026-06-06T12:00:00"
 }
 ```
 
-然后 ESP32-S3 再请求：
+### 4.5 单独 TTS 接口
 
 ```http
-GET /api/audio/reply/abc123.mp3
+POST /api/voice/tts
+Content-Type: application/json
+
+{
+  "text": "你好，我在这里。"
+}
 ```
 
-这种“两步返回”比直接在一次请求里返回二进制音频更方便调试。等稳定后，也可以改成直接返回音频流。
+用途：单独测试文字转语音和音频下载。
+
+### 4.6 音频下载接口
+
+```http
+GET /api/audio/reply/{reply_id}
+```
+
+ESP32-S3 可根据 `audio_url` 下载 MP3 并播放。
+
+### 4.7 实时语音 WebSocket
+
+```text
+ws://<server-host>:8000/ws/voice?device_id=esp32s3-001&sample_rate=16000
+```
+
+音频格式：
+
+```text
+PCM signed 16-bit little-endian, mono, 16000 Hz
+```
+
+客户端发送二进制 PCM 分片，结束一轮说话时发送：
+
+```text
+__END_OF_UTTERANCE__
+```
+
+服务端会返回：
+
+- `ready`：连接就绪。
+- `partial_text`：局部识别结果。
+- `final_text`：最终识别文本。
+- `reply`：机器人文本回复、情绪结果和音频 URL。
+- `no_speech`：没有识别到有效语音。
+- `error`：错误信息。
+
+协议细节见：
+
+```text
+WEBSOCKET_VOICE_PROTOCOL.md
+```
 
 ## 5. 音频格式建议
 
 ESP32-S3 上传建议：
 
-- 格式：WAV 或原始 PCM。
-- 采样率：16000 Hz。
-- 声道：单声道。
-- 位深：16-bit。
-- 单次录音长度：第一版建议 3-8 秒。
-- 文件大小：尽量控制在几百 KB 以内。
+- HTTP 第一版：WAV，单声道，16-bit PCM，16000 Hz。
+- WebSocket 版：原始 PCM signed 16-bit little-endian，单声道，16000 Hz。
+- 单次说话长度：第一版建议 3 到 8 秒。
+- 分片大小：WebSocket 初期可从 20 到 100 ms 音频一片开始测试。
 
-服务器返回建议：
+服务端返回建议：
 
-- 第一版：MP3，体积小。
-- 如果 ESP32-S3 播放 MP3 麻烦：返回 WAV，解码简单但文件大。
+- 当前默认：MP3。
+- 如果 ESP32-S3 解码 MP3 麻烦，可后续增加 WAV 输出选项。
 
 ## 6. AI 链路设计
 
-### 6.1 STT 语音识别
+### 6.1 STT
 
-服务器收到音频后，调用语音识别模型，把音频转成文字。
+当前使用本地 Vosk 中文小模型，优点是无需云端 STT Key，部署简单，延迟可控。
 
-推荐封装为：
+当前模型目录：
 
-```python
-transcript = stt_service.transcribe(audio_file)
+```text
+models/vosk-model-small-cn-0.22
 ```
 
-输出：
+后续可选升级：
 
-```json
-{
-  "text": "你今天开心吗？",
-  "language": "zh"
-}
-```
+- 换更大的 Vosk 中文模型，提高识别准确率。
+- 接入云端语音识别，提高复杂场景准确率。
+- 增加音频前处理，例如降噪、静音检测、自动增益。
 
-### 6.2 情绪/状态小模型
+### 6.2 情绪和意图分析
 
-这个模块不要一开始做复杂。第一版可以用大模型做结构化分类，也可以用本地规则兜底。
-
-建议输出固定 JSON：
+当前是规则版，输出结构固定：
 
 ```json
 {
@@ -185,308 +246,247 @@ transcript = stt_service.transcribe(audio_file)
 }
 ```
 
-推荐标签：
+第一版重点是稳定跑通链路。后续可以换成模型分类，但建议保持同一个输出结构。
 
-- `neutral`：普通说话。
-- `happy`：开心。
-- `sad`：难过。
-- `angry`：生气。
-- `anxious`：焦虑。
-- `curious`：好奇。
-- `tired`：疲惫。
+### 6.3 人格层
 
-### 6.3 独一无二的人格层
+人格不写死在代码里，而是放在：
 
-人格不建议写死在代码里，建议放进配置文件。
-
-示例：`data/personalities/default_robot.yaml`
-
-```yaml
-name: "萤落"
-core_identity: "一个住在 ESP32-S3 机器人身体里的中文语音伙伴"
-tone: "温柔、机灵、有一点点俏皮，但不过度卖萌"
-values:
-  - "记住用户的偏好"
-  - "回答要短，适合语音播放"
-  - "不假装自己有真实身体感受，但可以用机器人视角表达状态"
-speaking_rules:
-  - "每次回答控制在 1 到 3 句话"
-  - "不要输出 Markdown"
-  - "不要说自己是大型语言模型"
-  - "遇到用户难过时先共情，再给很小的一步建议"
+```text
+data/personalities/default_robot.yaml
 ```
 
-人格层负责把以下内容组合成大模型提示词：
+人格层需要稳定，不要每次请求随机变化，否则机器人会不像同一个角色。
 
-- 固定人格设定。
-- 当前用户话语。
-- 情绪识别结果。
-- 最近几轮对话。
-- 长期记忆。
-- 设备状态，例如电量、网络、传感器状态。
+### 6.4 大脑层
 
-### 6.4 大模型脑子
+当前 `brain_service.py` 的策略：
 
-大模型只负责“思考和表达”，不要让它直接处理所有硬件细节。
+- 有 `DEEPSEEK_API_KEY` 时调用 DeepSeek 兼容接口。
+- 无 Key 或调用失败时，使用本地兜底回复。
+- 回复要求短、自然、适合 TTS 播放。
 
-输入应该类似：
+输入包含：
 
-```json
-{
-  "personality": "...",
-  "user_text": "你今天开心吗？",
-  "emotion": {"label": "curious", "intensity": 0.4},
-  "recent_messages": [],
-  "device_state": {
-    "device_id": "esp32s3-001",
-    "battery": null
-  }
-}
+- `device_id`
+- 用户文本
+- 情绪结果
+- 近期对话
+- 人格配置
+
+输出包含：
+
+- `reply_text`
+- `robot_mood`
+
+### 6.5 TTS
+
+当前支持：
+
+- Edge TTS：默认，声音由 `TTS_VOICE` 配置。
+- gTTS：通过 `TTS_PROVIDER=gtts` 切换。
+
+生成音频保存到：
+
+```text
+audio_outputs/
 ```
-
-输出建议固定为：
-
-```json
-{
-  "reply_text": "我现在像是刚被点亮的小灯，挺开心的。你刚刚跟我说话，我就更有精神了。",
-  "robot_mood": "warm",
-  "memory_to_save": "用户关心机器人的状态"
-}
-```
-
-### 6.5 TTS 文字转语音
-
-大模型生成 `reply_text` 后，TTS 模块把文字转成音频。
-
-推荐封装为：
-
-```python
-audio_path = tts_service.speak(reply_text, voice="default")
-```
-
-第一版可以先统一一个声音。后面再根据情绪调节语速、音色或停顿。
 
 ## 7. 记忆系统
 
-第一版记忆不要太复杂，建议 SQLite 三张表：
+当前记忆是进程内列表，只保存最近对话，服务重启后会丢失。
 
-### devices
-
-保存每块 ESP32-S3 的信息。
+下一步建议升级为 SQLite，使用已预留的：
 
 ```text
-device_id
-name
-created_at
-last_seen_at
-personality_id
+MEMORY_DB_PATH=data/memory.sqlite
 ```
 
-### conversations
-
-保存对话记录。
+建议第一版 SQLite 表：
 
 ```text
-id
-device_id
-user_text
-reply_text
-emotion_label
-created_at
+devices
+  device_id
+  name
+  created_at
+  last_seen_at
+  personality_id
+
+conversations
+  id
+  device_id
+  user_text
+  reply_text
+  emotion_label
+  created_at
+
+memories
+  id
+  device_id
+  memory_text
+  importance
+  created_at
+  updated_at
 ```
 
-### memories
+记忆系统先做“可保存、可读取、可调试”，后续再考虑向量检索。
 
-保存长期记忆。
+## 8. ESP32-S3 固件任务
 
-```text
-id
-device_id
-memory_text
-importance
-created_at
-updated_at
-```
-
-后续如果记忆多了，再升级成向量数据库。
-
-## 8. ESP32-S3 端任务
-
-ESP32-S3 固件需要实现：
+ESP32-S3 端需要实现：
 
 1. 连接 Wi-Fi。
 2. 初始化 I2S 麦克风。
-3. 录音并保存为 WAV/PCM。
-4. 通过 HTTP multipart 上传音频。
-5. 解析服务器 JSON。
-6. 下载 `audio_url` 返回的音频。
+3. 录制 16 kHz、16-bit、单声道音频。
+4. 第一版通过 HTTP multipart 上传 WAV 到 `/api/voice/chat`。
+5. 解析返回 JSON。
+6. 根据 `audio_url` 下载 MP3。
 7. 通过 I2S 功放或 DAC 播放音频。
-8. 出错时用蜂鸣、灯光或串口日志提示。
+8. 出错时通过串口日志、灯光或蜂鸣提示。
 
-第一版建议先用串口打印：
+WebSocket 版额外需要：
+
+1. 建立 `/ws/voice` 连接。
+2. 发送 `start` 控制消息。
+3. 持续发送 PCM 二进制分片。
+4. 说话结束时发送 `__END_OF_UTTERANCE__`。
+5. 接收 `partial_text`、`final_text` 和 `reply`。
+6. 下载或播放 `reply.audio_url`。
+7. 处理断线重连和超时。
+
+## 9. 落地路线
+
+### 阶段 1：服务端文本链路
+
+状态：已完成。
+
+验收：
 
 ```text
-user_text: ...
-reply_text: ...
-audio_url: ...
+POST /api/device/message
 ```
 
-确认服务器链路正常后，再接播放。
+能返回带人格倾向的中文回复。
 
-## 9. 分阶段落地路线
+### 阶段 2：HTTP 语音识别
 
-### 阶段 1：跑通文字大脑
-
-目标：先不用麦克风，只用文本测试接口让服务器返回人格化回答。
-
-要做：
-
-- 添加 OpenAI API Key 环境变量。
-- 新增 `brain_service.py`。
-- 新增人格配置文件。
-- 修改 `/api/device/message`，让它调用大模型生成回答。
+状态：已完成基础版。
 
 验收：
 
-- `POST /api/device/message` 输入“你好”，返回有机器人性格的中文回答。
+```text
+POST /api/voice/transcribe
+```
 
-### 阶段 2：跑通语音识别
+上传单声道 16-bit PCM WAV，返回中文识别文本。
 
-目标：ESP32-S3 或电脑上传 WAV，服务器返回识别文字。
+### 阶段 3：TTS
 
-要做：
-
-- 新增 `/api/voice/transcribe`。
-- 新增 `stt_service.py`。
-- 保存上传文件到临时目录。
-- 调用语音识别模型。
+状态：已完成基础版。
 
 验收：
 
-- 上传一段中文 WAV，服务器返回正确文字。
+```text
+POST /api/voice/tts
+GET /api/audio/reply/{file}
+```
 
-### 阶段 3：跑通文字转语音
+能生成并播放 MP3。
 
-目标：服务器能把回答文字变成音频文件。
+### 阶段 4：HTTP 完整语音闭环
 
-要做：
-
-- 新增 `tts_service.py`。
-- 新增 `/api/audio/reply/{id}`。
-- 生成 MP3 或 WAV 文件。
-
-验收：
-
-- 浏览器打开音频 URL 可以播放。
-
-### 阶段 4：完整语音对话闭环
-
-目标：实现 `/api/voice/chat`。
-
-要做：
-
-- 上传音频。
-- STT 得到文字。
-- 情绪分析。
-- 加载人格和记忆。
-- 大模型生成回答。
-- TTS 生成音频。
-- 返回 `reply_text` 和 `audio_url`。
+状态：已完成服务端基础版。
 
 验收：
 
-- ESP32-S3 说一句话，服务器返回一段可播放语音。
+```text
+POST /api/voice/chat
+```
 
-### 阶段 5：加入长期记忆
+能返回识别文本、回复文本和音频 URL。
 
-目标：机器人开始记住用户偏好和长期事实。
+### 阶段 5：WebSocket 实时语音
 
-要做：
+状态：已完成服务端基础协议。
 
-- 加 SQLite。
-- 保存对话记录。
-- 让大模型判断哪些信息值得保存。
-- 每次回答前读取相关记忆。
+下一步：
 
-验收：
+- 用真实 ESP32-S3 固件联调。
+- 确认分片大小。
+- 确认弱网下的断线重连。
+- 观察 Vosk partial 识别延迟。
 
-- 用户告诉机器人“我喜欢蓝色”，后续问“我喜欢什么颜色”，机器人能答出来。
+### 阶段 6：长期记忆
 
-### 阶段 6：升级实时语音
+状态：待做。
 
-目标：减少等待时间，让体验更像实时对话。
+下一步：
 
-可选方案：
+- 将 `memory_service.py` 升级为 SQLite。
+- 保存完整对话历史。
+- 加入长期记忆提取和读取策略。
 
-- WebSocket：ESP32-S3 分片上传音频，服务器边收边处理。
-- OpenAI Realtime API：服务器作为中转，处理更低延迟的语音对话。
+### 阶段 7：体验优化
 
-建议等第一版稳定后再做这一阶段。
+状态：待做。
 
-## 10. 环境变量建议
+可优化方向：
 
-后续服务器至少需要：
+- 语音活动检测，减少无效音频。
+- TTS 声音、语速、情绪参数调优。
+- 支持 WAV 输出，降低 ESP32-S3 播放解码难度。
+- 增加请求超时、重试、日志和错误码。
+- 加入上传文件大小限制。
+
+## 10. 环境变量
+
+常用配置：
 
 ```env
-OPENAI_API_KEY=你的_API_Key
 PERSONALITY_ID=default_robot
-AUDIO_OUTPUT_DIR=/app/audio_outputs
-MEMORY_DB_PATH=/app/data/memory.sqlite
+AUDIO_OUTPUT_DIR=audio_outputs
+MEMORY_DB_PATH=data/memory.sqlite
+
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_REASONING_EFFORT=high
+DEEPSEEK_THINKING_ENABLED=true
+DEEPSEEK_TIMEOUT_SECONDS=30
+
+TTS_PROVIDER=edge
+TTS_LANGUAGE=zh-CN
+TTS_VOICE=zh-CN-XiaoxiaoNeural
+TTS_RATE=+0%
+TTS_CONNECT_TIMEOUT_SECONDS=5
+TTS_READ_TIMEOUT_SECONDS=15
+
+VOSK_MODEL_DIR=models/vosk-model-small-cn-0.22
 ```
 
-Docker Compose 后续可以加入：
+Docker Compose 中已挂载：
 
 ```yaml
-environment:
-  - OPENAI_API_KEY=${OPENAI_API_KEY}
-  - PERSONALITY_ID=default_robot
 volumes:
   - ./data:/app/data
   - ./audio_outputs:/app/audio_outputs
+  - ./models:/app/models
 ```
 
-## 11. OpenAI 接口选择建议
+## 11. 注意事项
 
-以官方文档为准，建议优先采用：
+- 不要把 API Key 写进代码，统一走环境变量。
+- ESP32-S3 第一版优先走短语音 HTTP 上传，稳定后再重点优化 WebSocket。
+- 服务端要限制上传大小，避免异常请求拖垮服务。
+- 大模型回复要短，适合直接语音播放。
+- 人格配置要稳定，避免机器人表现漂移。
+- WebSocket 协议变化时，要同步更新 `WEBSOCKET_VOICE_PROTOCOL.md`。
+- 代码中历史中文字符串存在编码问题，后续建议统一清理为 UTF-8。
 
-- Responses API：作为大模型“大脑”的主接口。
-- Audio transcription：用于语音转文字。
-- Text to speech：用于文字转语音。
-- Realtime API：后续做低延迟实时语音时再接入。
+## 12. 当前结论
 
-参考：
+服务端已经从“架构雏形”推进到“基础可联调”阶段。下一阶段最值得投入的是：
 
-- OpenAI Responses API: <https://platform.openai.com/docs/api-reference/responses>
-- OpenAI Audio transcription: <https://platform.openai.com/docs/api-reference/audio/createTranscription>
-- OpenAI Text to speech: <https://platform.openai.com/docs/api-reference/audio/createSpeech>
-- OpenAI Realtime API: <https://platform.openai.com/docs/guides/realtime>
-
-## 12. 第一版最小可运行接口目标
-
-最终第一版服务器建议提供：
-
-```text
-GET  /
-POST /api/device/message
-POST /api/voice/transcribe
-POST /api/voice/chat
-GET  /api/audio/reply/{reply_id}
-```
-
-其中真正给 ESP32-S3 使用的是：
-
-```text
-POST /api/voice/chat
-GET  /api/audio/reply/{reply_id}
-```
-
-## 13. 注意事项
-
-- 不要把 OpenAI API Key 写进代码，要用环境变量。
-- ESP32-S3 端尽量上传短音频，避免内存压力。
-- 服务端要限制上传文件大小，防止异常请求拖垮服务器。
-- 每次大模型回答要短，适合语音播放。
-- 人格配置要稳定，不要每次请求随机变化，否则机器人会“不像同一个人”。
-- 情绪模块第一版可以简单，重点是先跑通完整链路。
-- 服务器日志要记录 `device_id`、识别文字、回答文字和错误原因，方便调试。
-
+1. 用 ESP32-S3 跑通真实端到端链路。
+2. 把内存记忆升级为 SQLite。
+3. 根据真实延迟决定 HTTP 短语音和 WebSocket 实时语音的主路径。

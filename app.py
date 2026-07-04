@@ -3,14 +3,13 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from fastapi import WebSocket
-from fastapi import WebSocketDisconnect
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from schemas.api import (
     DeviceMessage,
+    EmotionResult,
     TextChatResponse,
     TextToSpeechRequest,
     TextToSpeechResponse,
@@ -18,7 +17,7 @@ from schemas.api import (
 )
 from services.brain_service import generate_reply
 from services.emotion_service import analyze_emotion
-from services.memory_service import get_recent_turns, save_conversation_turn
+from services.memory_service import get_recent_turns, get_user_profile, save_conversation_turn
 from services.settings import get_settings
 from services.stt_service import (
     accept_pcm_chunk,
@@ -27,6 +26,7 @@ from services.stt_service import (
     transcribe_audio,
 )
 from services.tts_service import synthesize_speech
+
 
 app = FastAPI(title="ESP32-S3 Voice Robot Server")
 logger = logging.getLogger(__name__)
@@ -44,28 +44,18 @@ def health_check():
 
 
 @app.post("/api/device/message", response_model=TextChatResponse)
-def receive_message(data: DeviceMessage):
-    emotion = analyze_emotion(data.message)
-    recent_turns = get_recent_turns(data.device_id)
-    print(f"刷新语句")
-    reply_text, robot_mood = generate_reply(
-        device_id=data.device_id,
-        user_text=data.message,
-        emotion=emotion,
-        recent_turns=recent_turns,
-    )
+async def receive_message(data: DeviceMessage):
+    device_id = data.device_id.strip()
+    user_text = data.message.strip()
+    if not device_id or not user_text:
+        raise HTTPException(status_code=400, detail="device_id and message cannot be empty")
 
-    save_conversation_turn(
-        device_id=data.device_id,
-        user_text=data.message,
-        reply_text=reply_text,
-        emotion_label=emotion.label,
-    )
+    emotion, reply_text, robot_mood = await _complete_text_turn(device_id, user_text)
 
     return TextChatResponse(
         ok=True,
-        device_id=data.device_id,
-        user_text=data.message,
+        device_id=device_id,
+        user_text=user_text,
         emotion=emotion,
         reply_text=reply_text,
         robot_mood=robot_mood,
@@ -82,6 +72,7 @@ async def transcribe_voice(audio: UploadFile = File(...)):
         "transcript": transcript,
         "time": datetime.now().isoformat(),
     }
+
 
 @app.websocket("/ws/voice")
 async def voice_ws(
@@ -137,7 +128,7 @@ async def voice_ws(
                 control_type = control.get("type")
 
                 if control_type == "start":
-                    device_id = str(control.get("device_id") or device_id)
+                    device_id = str(control.get("device_id") or device_id).strip()
                     sample_rate = int(control.get("sample_rate") or sample_rate)
                     recognizer = create_pcm_recognizer(sample_rate)
                     pcm_buffer.clear()
@@ -175,21 +166,11 @@ async def voice_ws(
                     recognizer = create_pcm_recognizer(sample_rate)
                     pcm_buffer.clear()
                     last_partial = ""
-                    await ws.send_json(
-                        {
-                            "type": "reset",
-                            "time": datetime.now().isoformat(),
-                        }
-                    )
+                    await ws.send_json({"type": "reset", "time": datetime.now().isoformat()})
                     continue
 
                 if control_type == "ping":
-                    await ws.send_json(
-                        {
-                            "type": "pong",
-                            "time": datetime.now().isoformat(),
-                        }
-                    )
+                    await ws.send_json({"type": "pong", "time": datetime.now().isoformat()})
                     continue
 
                 await ws.send_json(
@@ -212,6 +193,7 @@ async def voice_ws(
             },
         )
 
+
 @app.post("/api/voice/chat", response_model=VoiceChatResponse)
 async def voice_chat(
     device_id: str = Form(...),
@@ -220,25 +202,17 @@ async def voice_chat(
     sample_rate: int = Form(16000),
 ):
     _ = format, sample_rate
+    device_id = device_id.strip()
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id cannot be empty")
+
     transcript = await transcribe_audio(audio)
-    user_text = transcript["text"]
+    user_text = str(transcript["text"]).strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="No recognizable speech received")
 
-    emotion = analyze_emotion(user_text)
-    recent_turns = get_recent_turns(device_id)
-    reply_text, robot_mood = generate_reply(
-        device_id=device_id,
-        user_text=user_text,
-        emotion=emotion,
-        recent_turns=recent_turns,
-    )
+    emotion, reply_text, robot_mood = await _complete_text_turn(device_id, user_text)
     audio_url = await _try_synthesize_speech(reply_text)
-
-    save_conversation_turn(
-        device_id=device_id,
-        user_text=user_text,
-        reply_text=reply_text,
-        emotion_label=emotion.label,
-    )
 
     return VoiceChatResponse(
         ok=True,
@@ -254,14 +228,18 @@ async def voice_chat(
 
 @app.post("/api/voice/tts", response_model=TextToSpeechResponse)
 async def text_to_speech(data: TextToSpeechRequest):
+    text = data.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text cannot be empty")
+
     try:
-        audio_url, _audio_path = await synthesize_speech(data.text)
+        audio_url, _audio_path = await synthesize_speech(text)
     except Exception as exc:
         logger.exception("Text-to-speech failed")
         raise HTTPException(status_code=503, detail="Text-to-speech service unavailable") from exc
     return TextToSpeechResponse(
         ok=True,
-        text=data.text,
+        text=text,
         audio_url=audio_url,
         time=datetime.now().isoformat(),
     )
@@ -277,6 +255,31 @@ def get_reply_audio(reply_id: str):
 
     media_type = _guess_audio_media_type(audio_path)
     return FileResponse(audio_path, media_type=media_type, filename=audio_path.name)
+
+
+async def _complete_text_turn(
+    device_id: str,
+    user_text: str,
+) -> tuple[EmotionResult, str, str]:
+    emotion = analyze_emotion(user_text)
+    user_profile = get_user_profile(device_id)
+    recent_turns = get_recent_turns(device_id)
+    reply_text, robot_mood = await asyncio.to_thread(
+        generate_reply,
+        device_id=device_id,
+        user_text=user_text,
+        emotion=emotion,
+        recent_turns=recent_turns,
+        user_profile=user_profile,
+    )
+
+    save_conversation_turn(
+        device_id=device_id,
+        user_text=user_text,
+        reply_text=reply_text,
+        emotion_label=emotion.label,
+    )
+    return emotion, reply_text, robot_mood
 
 
 async def _try_synthesize_speech(text: str) -> str | None:
@@ -340,23 +343,8 @@ async def _send_voice_reply(
         )
         return
 
-    emotion = analyze_emotion(user_text)
-    recent_turns = get_recent_turns(device_id)
-    reply_text, robot_mood = await asyncio.to_thread(
-        generate_reply,
-        device_id=device_id,
-        user_text=user_text,
-        emotion=emotion,
-        recent_turns=recent_turns,
-    )
+    emotion, reply_text, robot_mood = await _complete_text_turn(device_id, user_text)
     audio_url = await _try_synthesize_speech(reply_text)
-
-    save_conversation_turn(
-        device_id=device_id,
-        user_text=user_text,
-        reply_text=reply_text,
-        emotion_label=emotion.label,
-    )
 
     await ws.send_json(
         {

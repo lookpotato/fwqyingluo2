@@ -22,7 +22,11 @@ services:
       - TTS_LANGUAGE=${TTS_LANGUAGE:-zh-CN}
       - TTS_VOICE=${TTS_VOICE:-zh-CN-XiaoxiaoNeural}
       - TTS_RATE=${TTS_RATE:-+0%}
+      - STT_PROVIDER=${STT_PROVIDER:-vosk}
       - VOSK_MODEL_DIR=${VOSK_MODEL_DIR:-/app/models/vosk-model-small-cn-0.22}
+      - SHERPA_MODEL_DIR=${SHERPA_MODEL_DIR:-/app/models/sherpa-onnx-streaming-zipformer-ctc-zh-int8-2025-06-30}
+      - SHERPA_NUM_THREADS=${SHERPA_NUM_THREADS:-2}
+      - SHERPA_PROVIDER=${SHERPA_PROVIDER:-cpu}
     volumes:
       - ./data:/app/data
       - ./audio_outputs:/app/audio_outputs
